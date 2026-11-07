@@ -1,0 +1,35 @@
+name: Publish an app release
+# Publishes one Hartmann Studios app's signed direct APK as a public release of this repo. The APK comes from Tab's private,
+# key-protected drop (put there by the app repo's direct-ship workflow) and is checked against its sha256 first.
+on:
+  workflow_dispatch:
+    inputs:
+      drop_name: {description: "drop entry (dskship_<repo>_<release id>)", required: true}
+      tag: {description: "release tag, e.g. nightsay-v1.0.3", required: true}
+      title: {description: "release title", required: true}
+      notes: {description: "release notes (markdown)", required: true}
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Fetch the APK from the drop
+      env:
+        DROP_KEY: ${{ secrets.DROP_KEY }}
+        N: ${{ github.event.inputs.drop_name }}
+      run: |
+        set -eo pipefail
+        U=https://hs-apk-drop.charles-h-hartmann1.workers.dev
+        curl -sf -m 60 -H "X-Key: $DROP_KEY" "$U/c/$N.info/0" > info.json; cat info.json
+        C=$(jq -r .chunks info.json); S=$(jq -r .sha256 info.json)
+        : > a.tgz; for i in $(seq 0 $((C-1))); do curl -sf -m 300 --retry 3 -H "X-Key: $DROP_KEY" "$U/c/$N/$i" >> a.tgz; done
+        echo "$S  a.tgz" | sha256sum -c
+        mkdir -p out && tar xzf a.tgz -C out && ls -la out && sha256sum out/*.apk
+    - uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ github.event.inputs.tag }}
+        name: ${{ github.event.inputs.title }}
+        body: ${{ github.event.inputs.notes }}
+        files: out/*.apk
+        make_latest: false
