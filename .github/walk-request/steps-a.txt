@@ -10,7 +10,11 @@ shot 03-shop
 tap (?i)^BUY .*2\.99$
 wait 3
 shot 04-email
+tap (?i)^you@example\.com$
+wait 2
 type hartmannstudios@mail.tab.bot
+wait 2
+shot 04b-email-typed
 tap (?i)^continue$
 wait 25
 shot 05-stripe-checkout

@@ -7,6 +7,12 @@ shot 11-shop-before-restore
 tap (?i)^RESTORE PURCHASES$
 wait 3
 shot 12-restore-email
+tap (?i)(you@example\.com|hartmannstudios@mail\.tab\.bot)
+wait 1
+sh input keyevent 123; for i in $(seq 1 40); do input keyevent 67; done
+type hartmannstudios@mail.tab.bot
+wait 2
+shot 12b-restore-email-typed
 tap (?i)^continue$
 wait 12
 shot 13-shop-after-restore
