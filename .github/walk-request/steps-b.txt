@@ -7,10 +7,9 @@ shot 11-shop-before-restore
 tap (?i)^RESTORE PURCHASES$
 wait 3
 shot 12-restore-email
-tap (?i)(you@example\.com|hartmannstudios@mail\.tab\.bot)
-wait 1
-sh input keyevent 123; for i in $(seq 1 40); do input keyevent 67; done
-type hartmannstudios@mail.tab.bot
+tap (?i)(you@example\.com|hartmannstudios@)
+wait 2
+sh for i in 1 2 3 4; do uiautomator dump /sdcard/u.xml >/dev/null 2>&1; grep -q 'text="hartmannstudios@mail.tab.bot"' /sdcard/u.xml && echo EMAIL_OK && break; for j in $(seq 1 35); do input keyevent 112; input keyevent 67; done; input text hartmannstudios@mail.tab.bot; sleep 3; done
 wait 2
 shot 12b-restore-email-typed
 tap (?i)^continue$
