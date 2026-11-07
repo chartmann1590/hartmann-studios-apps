@@ -1,0 +1,19 @@
+launch
+wait 20
+shot 01-launch
+taploop (?i)^(ok|continue|got it|skip|allow|accept|agree)$
+wait 5
+shot 02-menu-with-shop
+sh input tap 1032 1521; sleep 5; dumpsys activity activities | grep -q 'ResumedActivity.*ShopActivity' || { input tap 1032 1441; sleep 5; }; dumpsys activity activities | grep -q 'ResumedActivity.*ShopActivity' || { input tap 1032 1482; sleep 5; }; dumpsys activity activities | grep -m1 'topResumedActivity'
+wait 6
+shot 03-shop
+tap (?i)^BUY .*2\.99$
+wait 3
+shot 04-email
+type hartmannstudios@mail.tab.bot
+tap (?i)^continue$
+wait 25
+shot 05-stripe-checkout
+tap (?i)^close$
+wait 3
+shot 06-after-close

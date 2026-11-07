@@ -1,0 +1,9 @@
+stop
+launch
+wait 20
+shot 20-relaunch-menu
+sh input tap 1032 1521; sleep 5; dumpsys activity activities | grep -q 'ResumedActivity.*ShopActivity' || { input tap 1032 1441; sleep 5; }; dumpsys activity activities | grep -q 'ResumedActivity.*ShopActivity' || { input tap 1032 1482; sleep 5; }; dumpsys activity activities | grep -m1 'topResumedActivity'
+wait 6
+shot 21-shop-after-relaunch
+back
+wait 3

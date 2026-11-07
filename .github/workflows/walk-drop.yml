@@ -1,0 +1,61 @@
+name: Walk a test build from the drop (emulator proof, two phases)
+# Tab, Nov 7 2026: installs a signed, NOT YET PUBLISHED test APK from Tab's private key-protected drop on a
+# Nexus 7 emulator (Google APIs, no Play Store) and walks it in phases: A (open checkout), wait for Tab's
+# go flag (Tab completes a single-use 100%-off test checkout meanwhile), B (restore + unlocked state), C (relaunch).
+# Screenshots + UI text + logcat go back to the drop. Triggered only by a push to .github/walk-request/ on this branch.
+on:
+  push:
+    branches: [direct-stripe]
+    paths: ['.github/walk-request/request.txt']
+permissions:
+  contents: read
+jobs:
+  walk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+    - name: Fetch the test APK from the drop
+      env:
+        DROP_KEY: ${{ secrets.DROP_KEY }}
+      run: |
+        set -eo pipefail
+        [ -f .github/walk-request/request.txt ] || { echo "no request"; exit 1; }
+        N=$(sed -n 1p .github/walk-request/request.txt | tr -cd 'A-Za-z0-9_-'); echo "drop entry $N"; echo "N=$N" >> $GITHUB_ENV
+        U=https://hs-apk-drop.charles-h-hartmann1.workers.dev
+        curl -sf -m 60 -H "X-Key: $DROP_KEY" "$U/c/$N.info/0" > info.json; cat info.json
+        C=$(jq -r .chunks info.json); S=$(jq -r .sha256 info.json)
+        : > a.tgz; for i in $(seq 0 $((C-1))); do curl -sf -m 300 --retry 3 -H "X-Key: $DROP_KEY" "$U/c/$N/$i" >> a.tgz; done
+        echo "$S  a.tgz" | sha256sum -c
+        mkdir -p dsk-apk && tar xzf a.tgz -C dsk-apk && ls -la dsk-apk && sha256sum dsk-apk/*.apk
+        BT=$ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | sort -V | tail -1)
+        $BT/apksigner verify --print-certs dsk-apk/*.apk | head -3
+        $BT/aapt2 dump badging dsk-apk/*.apk | head -1
+    - name: Free runner disk for the emulator
+      run: |
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/lib/android/sdk/ndk /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium || true
+        df -h / | tail -1
+    - name: Enable KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+    - name: Emulator walk (phases A, wait, B, C)
+      uses: reactivecircus/android-emulator-runner@v2
+      env:
+        DROP_KEY: ${{ secrets.DROP_KEY }}
+      with:
+        api-level: 30
+        profile: Nexus 7 2013
+        target: google_apis
+        arch: x86_64
+        ram-size: 3072M
+        disk-size: 4096M
+        emulator-boot-timeout: 1500
+        emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+        disable-animations: true
+        script: bash .github/walk-request/phases.sh
+    - name: Upload results to Tab's private drop
+      if: always()
+      env:
+        DROP_KEY: ${{ secrets.DROP_KEY }}
+      run: bash .github/walk/direct-upload.sh /tmp/dsk-out walkres_${{ env.N }}

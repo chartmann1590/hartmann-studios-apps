@@ -1,0 +1,15 @@
+launch
+wait 20
+shot 10-menu
+sh input tap 1032 1521; sleep 5; dumpsys activity activities | grep -q 'ResumedActivity.*ShopActivity' || { input tap 1032 1441; sleep 5; }; dumpsys activity activities | grep -q 'ResumedActivity.*ShopActivity' || { input tap 1032 1482; sleep 5; }; dumpsys activity activities | grep -m1 'topResumedActivity'
+wait 6
+shot 11-shop-before-restore
+tap (?i)^RESTORE PURCHASES$
+wait 3
+shot 12-restore-email
+tap (?i)^continue$
+wait 12
+shot 13-shop-after-restore
+back
+wait 5
+shot 14-menu-after-unlock
