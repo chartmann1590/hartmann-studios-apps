@@ -83,7 +83,8 @@ jobs:
     - name: Build log tail to the drop (on failure)
       if: failure()
       env: {DROP_KEY: "${{ secrets.DROP_KEY }}"}
-      run: tail -c 60000 /tmp/dsk-build.log 2>/dev/null | curl -s -m 60 -X PUT -H "X-Key: $DROP_KEY" --data-binary @- "https://hs-apk-drop.charles-h-hartmann1.workers.dev/c/buildlog_${{ github.event.inputs.app }}_r${{ github.run_number }}/0" || true
+      run: |
+        tail -c 60000 /tmp/dsk-build.log 2>/dev/null | curl -s -m 60 -X PUT -H "X-Key: $DROP_KEY" --data-binary @- "https://hs-apk-drop.charles-h-hartmann1.workers.dev/c/buildlog_${{ github.event.inputs.app }}_r${{ github.run_number }}/0" || true
     - name: Ship the build outputs to the drop
       env: {DROP_KEY: "${{ secrets.DROP_KEY }}"}
       run: |
@@ -115,4 +116,5 @@ jobs:
     - name: Walk results to the drop
       if: always()
       env: {DROP_KEY: "${{ secrets.DROP_KEY }}"}
-      run: bash .github/walk/direct-upload.sh /tmp/dsk-out walk_${{ github.event.inputs.app }}_r${{ github.run_number }}
+      run: |
+        bash .github/walk/direct-upload.sh /tmp/dsk-out walk_${{ github.event.inputs.app }}_r${{ github.run_number }}
