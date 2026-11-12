@@ -1,0 +1,118 @@
+name: Build a private-source app (direct + Play) and walk it
+# Builds one Hartmann Studios app whose source lives in a private repo. The source arrives as a tarball from Tab's private,
+# key-protected drop (never committed here). Builds the Play flavor (AAB, compile check) and the direct/Stripe flavor (signed APK),
+# walks the direct APK on a phone-size emulator, and puts the APK + AAB and the walk results back in the drop.
+# Nothing is released from this workflow: publish.yml does that, from the drop, after the walk is checked.
+on:
+  workflow_dispatch:
+    inputs:
+      app: {description: "app key, e.g. doorframe", required: true}
+      apk_name: {description: "APK base name, e.g. Doorframe", required: true}
+      drop: {description: "source drop entry name", required: true}
+      steps: {description: "steps file in the source's .github/direct/", default: "steps-release.txt"}
+      admob_app: {description: "AdMob app id (public, in the manifest)", default: ""}
+      admob_banner: {description: "AdMob banner unit", default: ""}
+      admob_inter: {description: "AdMob interstitial unit", default: ""}
+      play: {description: "also build the Play flavor (AAB)", default: "true"}
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.event.inputs.app }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    steps:
+    - uses: actions/checkout@v4
+    - name: Fetch the source from the drop
+      env:
+        DROP_KEY: ${{ secrets.DROP_KEY }}
+        N: ${{ github.event.inputs.drop }}
+      run: |
+        set -eo pipefail
+        U=https://hs-apk-drop.charles-h-hartmann1.workers.dev
+        curl -sf -m 60 -H "X-Key: $DROP_KEY" "$U/c/$N.info/0" > info.json
+        C=$(jq -r .chunks info.json); S=$(jq -r .sha256 info.json)
+        : > src.tgz; for i in $(seq 0 $((C-1))); do curl -sf -m 300 --retry 3 -H "X-Key: $DROP_KEY" "$U/c/$N/$i" >> src.tgz; done
+        echo "$S  src.tgz" | sha256sum -c
+        mkdir -p src && tar xzf src.tgz -C src && rm -f src.tgz info.json && ls src
+    - uses: actions/setup-java@v4
+      with: {distribution: temurin, java-version: "21"}
+    - uses: gradle/actions/setup-gradle@v4
+    - uses: android-actions/setup-android@v3
+      with: {packages: platform-tools}
+    - name: Signing + IDs
+      env:
+        KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        A: ${{ github.event.inputs.admob_app }}
+        B: ${{ github.event.inputs.admob_banner }}
+        I: ${{ github.event.inputs.admob_inter }}
+      run: |
+        cd src && mkdir -p play-creds
+        printf '%s' "$KEYSTORE_BASE64" | tr -cd 'A-Za-z0-9+/=' | base64 -d > play-creds/upload-key.jks
+        {
+          echo "sdk.dir=$ANDROID_HOME"
+          echo "UPLOAD_STORE_PASSWORD=$KEYSTORE_PASSWORD"; echo "UPLOAD_KEY_ALIAS=$KEY_ALIAS"; echo "UPLOAD_KEY_PASSWORD=$KEY_PASSWORD"
+          [ -n "$A" ] && echo "ADMOB_APP_ID=$A"; [ -n "$B" ] && echo "ADMOB_BANNER_AD_UNIT_ID=$B"; [ -n "$I" ] && echo "ADMOB_INTERSTITIAL_AD_UNIT_ID=$I"
+          true
+        } > local.properties
+        chmod +x gradlew
+    - name: Build Play flavor (AAB + APK, Google Play Billing)
+      if: github.event.inputs.play == 'true'
+      run: |
+        set -o pipefail
+        cd src && ./gradlew --no-daemon :app:bundleRelease :app:assembleRelease -Pstore=play --stacktrace 2>&1 | tee -a /tmp/dsk-build.log | grep -E "^(BUILD|FAILURE|e: |> Task :app:(compile|bundle|assemble))" | tail -40
+        mkdir -p ../out && cp app/build/outputs/bundle/release/*.aab "../out/${{ github.event.inputs.apk_name }}-play-release.aab"
+        ./gradlew --no-daemon clean -q
+    - name: Build direct flavor (APK, Stripe)
+      run: |
+        set -o pipefail
+        cd src && ./gradlew --no-daemon :app:assembleRelease -Pstore=direct --stacktrace 2>&1 | tee -a /tmp/dsk-build.log | grep -E "^(BUILD|FAILURE|e: |> Task :app:(compile|assemble))" | tail -40
+        mkdir -p ../out ../dsk-apk
+        A=$(ls app/build/outputs/apk/release/*.apk | grep -v unsigned | head -1)
+        cp "$A" "../out/${{ github.event.inputs.apk_name }}-direct-release.apk"; cp "$A" "../dsk-apk/${{ github.event.inputs.apk_name }}-direct-release.apk"
+        BT=$ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | sort -V | tail -1)
+        $BT/apksigner verify --print-certs ../dsk-apk/*.apk | head -2 || true
+        $BT/aapt2 dump badging ../dsk-apk/*.apk | head -2 || true
+        echo "--- Play Billing classes in the direct APK (should be none):"; unzip -p ../dsk-apk/*.apk 'classes*.dex' | strings | grep -c "com/android/billingclient" || true
+        ls -la ../out
+    - name: Build log tail to the drop (on failure)
+      if: failure()
+      env: {DROP_KEY: "${{ secrets.DROP_KEY }}"}
+      run: tail -c 60000 /tmp/dsk-build.log 2>/dev/null | curl -s -m 60 -X PUT -H "X-Key: $DROP_KEY" --data-binary @- "https://hs-apk-drop.charles-h-hartmann1.workers.dev/c/buildlog_${{ github.event.inputs.app }}_r${{ github.run_number }}/0" || true
+    - name: Ship the build outputs to the drop
+      env: {DROP_KEY: "${{ secrets.DROP_KEY }}"}
+      run: |
+        cd out && sha256sum * | tee ../out-sha.txt && cd ..
+        cp out-sha.txt out/
+        bash .github/walk/direct-upload.sh out build_${{ github.event.inputs.app }}_r${{ github.run_number }}
+    - name: Free runner disk for the emulator
+      run: |
+        rm -rf src/app/build src/.gradle ~/.gradle/caches/transforms-* || true
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/lib/android/sdk/ndk /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium || true
+        df -h / | tail -1
+        cp src/.github/direct/*.txt .github/walk/ 2>/dev/null || true
+    - name: Enable KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+    - name: Emulator walk (phone, Google APIs, no Play Store)
+      uses: reactivecircus/android-emulator-runner@v2
+      with:
+        api-level: 31
+        profile: pixel_5
+        target: google_apis
+        arch: x86_64
+        ram-size: 3072M
+        disk-size: 6144M
+        emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back emulated
+        disable-animations: true
+        script: sed -i 's#\.github/direct#.github/walk#g' .github/walk/run-tests.sh && STEPS_FILE=${{ github.event.inputs.steps }} bash .github/walk/run-tests.sh
+    - name: Walk results to the drop
+      if: always()
+      env: {DROP_KEY: "${{ secrets.DROP_KEY }}"}
+      run: bash .github/walk/direct-upload.sh /tmp/dsk-out walk_${{ github.event.inputs.app }}_r${{ github.run_number }}
